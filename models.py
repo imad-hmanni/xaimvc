@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import streamlit as st  # IMPORT ESSENTIEL AJOUTÉ
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.feature_extraction.text import CountVectorizer
@@ -20,6 +21,7 @@ except ImportError:
 
 # --- 1. FONCTIONS DE CHARGEMENT ET DE PARSING ---
 
+@st.cache_data  # OPTIMISATION : Mise en cache pour éviter de recharger à chaque clic
 def load_and_parse_data(file_bytes_io):
     """
     Parse le fichier CSV complexe de Google Analytics de manière robuste et dynamique.
@@ -314,15 +316,13 @@ class SemanticAnalyzer:
         except:
             return ["Erreur lors de l'analyse thématique (données insuffisantes)"]
 
-# --- 2d. MOTEUR RECOMMANDATION DYNAMIQUE (PERSONNALISATION & CREATION) ---
+# --- 2d. MOTEUR RECOMMANDATION DYNAMIQUE ---
 class ContentRecommender:
     def __init__(self, df_pages):
         self.df_pages = df_pages
-        # API Key fournie par l'utilisateur
         self.GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 
     def get_content_suggestions_static(self):
-        """ Suggestions 'Règles métiers' (Fallback ou par défaut) """
         suggestions = [
             {
                 "segment": "",
@@ -335,11 +335,9 @@ class ContentRecommender:
         return suggestions
 
     def generate_gemini_suggestions(self):
-        """ Utilise Google Gemini pour générer des idées basées sur les données réelles """
         if not GEMINI_AVAILABLE:
             return self.get_content_suggestions_static()
 
-        # Construction du prompt avec les données réelles du CSV
         top_titles = self.df_pages.head(15)['Titre'].tolist()
         titles_str = "\n".join([f"- {t}" for t in top_titles])
 
@@ -365,11 +363,8 @@ class ContentRecommender:
         
         try:
             client = genai.Client(api_key=self.GEMINI_API_KEY)
+            model = "gemini-3-flash-preview"
             
-            model = "gemini-3-flash-preview" # Utilisation d'un modèle standard stable
-            
-            # Appel API Gemini
-            # Utilisation de generate_content_stream pour la cohérence avec votre exemple
             response_text = ""
             for chunk in client.models.generate_content_stream(
                 model=model,
@@ -377,22 +372,12 @@ class ContentRecommender:
             ):
                 response_text += chunk.text
             
-            # Nettoyage basique pour JSON
             json_str = response_text.replace("```json", "").replace("```", "").strip()
-            
-            # Parsing de la réponse JSON
             suggestions = json.loads(json_str)
             return suggestions
 
         except Exception as e:
-            # Fallback en cas d'erreur API (quota, réseau...)
-            # On retourne une structure compatible avec l'affichage, incluant l'erreur
             return [{"segment": "Erreur API", "context": "Gemini", "missing_content": f"Erreur: {str(e)}", "reasoning": "Vérifiez la clé API ou les quotas", "priority": "Haute"}]
-
-    def get_content_suggestions(self):
-        # Cette méthode n'est plus utilisée directement si on passe par le bouton Gemini, 
-        # mais on la garde pour la compatibilité ou le fallback manuel si besoin.
-        return self.get_content_suggestions_static()
 
 # --- 2e. MOTEUR D'OPTIMISATION DE CONTENU ---
 class ContentOptimizer:
