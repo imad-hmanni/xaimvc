@@ -110,7 +110,7 @@ def load_and_parse_data(file_bytes_io):
         "(not set)", "Email", "Paid Search", "Video", "Display", 
         "Utilisateurs", "Nouveaux utilisateurs", "Sessions", "page_view", "session_start", 
         "scroll", "click", "view_search_results", "file_download", "user_engagement", 
-        "first_visit", "video_start"
+        "first_visit", "video_start", "| Maroc.ma", "Page non trouvée | Maroc.ma" ,"Page not found | Maroc.ma","الصفحة غير موجودة | Maroc.ma"
     ]
 
     reader = csv.reader(lines)
@@ -195,6 +195,9 @@ class XAIEngine:
         pred_rf = self.rf_model.predict(future_idx)
         predictions = (pred_lin + pred_rf) / 2
         
+        # CORRECTION : Empêcher les prédictions négatives (Impossible d'avoir < 0 utilisateurs)
+        predictions = np.maximum(predictions, 0)
+        
         last_date = self.df['Date'].max()
         dates = [last_date + (step_delta * i) for i in range(1, days + 1)]
         
@@ -272,8 +275,22 @@ class SemanticAnalyzer:
             'او', 'أو', 'بين', 'هي', 'هو', 'نحن', 'هم', 'كل', 'قد', 'كما', 'لها', 'له', 'فيه', 'منه',
             'عنه', 'بها', 'عليها', 'عليه', 'تلك', 'ذلك', 'و', 'ف', 'ب', 'ل'
         ]
+        # 4. ✅ Stopwords Espagnols (NOUVEAU)
+        stopwords_es = [
+            'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas',
+            'de', 'del', 'al', 'y', 'o', 'pero', 'porque',
+            'con', 'sin', 'sobre', 'entre', 'hasta', 'desde',
+            'que', 'como', 'cuando', 'donde', 'quien',
+            'yo', 'tú', 'él', 'ella', 'nosotros', 'vosotros', 'ellos',
+            'me', 'te', 'se', 'nos', 'os',
+            'es', 'son', 'era', 'fue', 'ser', 'estar', 'tener',
+            'muy', 'más', 'menos', 'también', 'ya', 'aún',
+            'siempre', 'nunca', 'sitio', 'página', 'inicio',
+            'web', 'portal', 'contacto', 'privacidad','condiciones', 'uso', 'acceso',
+            'login', 'registro', 'com', 'es'
+        ]
         
-        self.stopwords = stopwords_fr + stopwords_en + stopwords_ar
+        self.stopwords = stopwords_fr + stopwords_en + stopwords_ar + stopwords_es
 
     def extract_top_keywords(self, top_n=10):
         if self.df_pages.empty:
@@ -320,7 +337,7 @@ class SemanticAnalyzer:
 class ContentRecommender:
     def __init__(self, df_pages):
         self.df_pages = df_pages
-        self.GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+        self.GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"] # Note: Clé API fictive du prompt
 
     def get_content_suggestions_static(self):
         suggestions = [
