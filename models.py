@@ -366,6 +366,7 @@ class ContentRecommender:
 
         titles_str = "\n".join([f"- {t}" for t in top_titles])
 
+        
         prompt = f"""
         Tu es un expert en stratégie de contenu web et UX.
         Voici les titres des pages les plus performantes du site (données réelles) :
@@ -641,3 +642,4 @@ def generate_recommendations(df_events, trend_data, df_pages=None):
         })
 
     return recos
+
