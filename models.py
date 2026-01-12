@@ -110,7 +110,13 @@ def load_and_parse_data(file_bytes_io):
         "(not set)", "Email", "Paid Search", "Video", "Display", 
         "Utilisateurs", "Nouveaux utilisateurs", "Sessions", "page_view", "session_start", 
         "scroll", "click", "view_search_results", "file_download", "user_engagement", 
-        "first_visit", "video_start", "| Maroc.ma", "Page non trouvée | Maroc.ma" ,"Page not found | Maroc.ma","الصفحة غير موجودة | Maroc.ma"
+        "first_visit", "video_start", "| Maroc.ma", "Page non trouvée | Maroc.ma" ,"Page not found | Maroc.ma","الصفحة غير موجودة | Maroc.ma",
+        "Home - Morocco Gaming Expo","Accueil - Morocco Gaming Expo", "الرئيسية - Morocco Gaming Expo",
+        "Page non trouvée - Morocco Gaming Expo", "Home - Morocco Gaming Industry", "الرئيسية - Morocco Gaming Industry", "Page non trouvée - Morocco Gaming Industry",
+        "البوابة الرسمية للمغرب - المؤسسات، الخدمات الإلكترونية، التراث | Maroc.ma" , "Official portal of Morocco - Institutions, e-services, heritage | Maroc.ma",
+        "Portail officiel du Maroc - Institutions, services en ligne, patrimoine | Maroc.ma", "Portail officiel du Maroc - Institutions, e-services, patrimoine | Maroc.ma",
+        "Accueil - Ministère de la Jeunesse, de la Culture et de la Communication", "الرئيسية - وزارة الشباب والثقافة والتواصل", "Page non trouvée - وزارة الشباب والثقافة والتواصل",
+        "يهدف موقع \"نية مغربية\" إلى متابعة أحدث التطورات والأخبار المتعلقة بكرة القدم المغربية", "“Niya Maghribiya” website provides a coverage of the latest", "Page non trouvée - Niya Maghribia"
     ]
 
     reader = csv.reader(lines)
