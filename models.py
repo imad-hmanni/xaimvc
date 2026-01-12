@@ -104,7 +104,7 @@ def load_and_parse_data(file_bytes_io):
     events_data = []
     page_data_extracted = []
     
-    # Liste d'exclusion MISE A JOUR
+    # Liste d'exclusion
     invalid_page_titles = [
         "Organic Search", "Direct", "Referral", "Organic Social", "Unassigned", 
         "(not set)", "Email", "Paid Search", "Video", "Display", 
@@ -124,8 +124,7 @@ def load_and_parse_data(file_bytes_io):
         if not row: continue
         
         if len(row) >= 2:
-            # NETTOYAGE RENFORCÉ DU NOM (Espaces insécables)
-            name = row[0].strip().replace('\xa0', ' ')
+            name = row[0].strip()
             val_str = row[-1].strip().replace('\xa0', '').replace(' ', '')
             
             if val_str.isdigit():
@@ -282,8 +281,22 @@ class SemanticAnalyzer:
             'او', 'أو', 'بين', 'هي', 'هو', 'نحن', 'هم', 'كل', 'قد', 'كما', 'لها', 'له', 'فيه', 'منه',
             'عنه', 'بها', 'عليها', 'عليه', 'تلك', 'ذلك', 'و', 'ف', 'ب', 'ل'
         ]
+        # 4. ✅ Stopwords Espagnols (NOUVEAU)
+        stopwords_es = [
+            'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas',
+            'de', 'del', 'al', 'y', 'o', 'pero', 'porque',
+            'con', 'sin', 'sobre', 'entre', 'hasta', 'desde',
+            'que', 'como', 'cuando', 'donde', 'quien',
+            'yo', 'tú', 'él', 'ella', 'nosotros', 'vosotros', 'ellos',
+            'me', 'te', 'se', 'nos', 'os',
+            'es', 'son', 'era', 'fue', 'ser', 'estar', 'tener',
+            'muy', 'más', 'menos', 'también', 'ya', 'aún',
+            'siempre', 'nunca', 'sitio', 'página', 'inicio',
+            'web', 'portal', 'contacto', 'privacidad','condiciones', 'uso', 'acceso',
+            'login', 'registro', 'com', 'es'
+        ]
         
-        self.stopwords = stopwords_fr + stopwords_en + stopwords_ar
+        self.stopwords = stopwords_fr + stopwords_en + stopwords_ar + stopwords_es
 
     def extract_top_keywords(self, top_n=10):
         if self.df_pages.empty:
@@ -330,7 +343,7 @@ class SemanticAnalyzer:
 class ContentRecommender:
     def __init__(self, df_pages):
         self.df_pages = df_pages
-         self.GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]  # Note: Clé API fictive du prompt
+        self.GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"] # Note: Clé API fictive du prompt
 
     def get_content_suggestions_static(self):
         suggestions = [
