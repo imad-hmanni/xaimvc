@@ -124,7 +124,7 @@ def load_and_parse_data(file_bytes_io):
         if not row: continue
         
         if len(row) >= 2:
-            name = row[0].strip().replace('\xa0', ' ')
+            name = row[0].strip()
             val_str = row[-1].strip().replace('\xa0', '').replace(' ', '')
             
             if val_str.isdigit():
@@ -362,11 +362,13 @@ class ContentRecommender:
             return self.get_content_suggestions_static()
 
         top_titles = self.df_pages.head(15)['Titre'].tolist()
+        
+
         titles_str = "\n".join([f"- {t}" for t in top_titles])
 
         prompt = f"""
         Tu es un expert en stratégie de contenu web et UX.
-        Voici les titres des pages les plus performantes du site 'Morocco Gaming Expo' (données réelles) :
+        Voici les titres des pages les plus performantes du site (données réelles) :
         {titles_str}
 
         Analyse ces titres pour comprendre ce qui intéresse l'audience.
@@ -639,4 +641,3 @@ def generate_recommendations(df_events, trend_data, df_pages=None):
         })
 
     return recos
-
