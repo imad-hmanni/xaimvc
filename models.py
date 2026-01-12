@@ -124,7 +124,7 @@ def load_and_parse_data(file_bytes_io):
         if not row: continue
         
         if len(row) >= 2:
-            name = row[0].strip()
+            name = row[0].strip().replace('\xa0', ' ')
             val_str = row[-1].strip().replace('\xa0', '').replace(' ', '')
             
             if val_str.isdigit():
@@ -639,3 +639,4 @@ def generate_recommendations(df_events, trend_data, df_pages=None):
         })
 
     return recos
+
