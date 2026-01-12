@@ -117,6 +117,8 @@ def load_and_parse_data(file_bytes_io):
         "Portail officiel du Maroc - Institutions, services en ligne, patrimoine | Maroc.ma", "Portail officiel du Maroc - Institutions, e-services, patrimoine | Maroc.ma",
         "Accueil - Ministère de la Jeunesse, de la Culture et de la Communication", "الرئيسية - وزارة الشباب والثقافة والتواصل", "Page non trouvée - وزارة الشباب والثقافة والتواصل",
         "يهدف موقع \"نية مغربية\" إلى متابعة أحدث التطورات والأخبار المتعلقة بكرة القدم المغربية", "“Niya Maghribiya” website provides a coverage of the latest", "Page non trouvée - Niya Maghribia"
+        , "الرئيسية - Le portail du Sahara Marocain - News" , "Accueil - News, info et actualité du Sahara Marocain", "Home - Le portail du Sahara Marocain - News", "Page non trouvée - Le portail du Sahara Marocain - News",
+        "Page non trouvée - Le portail du Sahara Marocain - News"
     ]
 
     reader = csv.reader(lines)
@@ -642,4 +644,5 @@ def generate_recommendations(df_events, trend_data, df_pages=None):
         })
 
     return recos
+
 
