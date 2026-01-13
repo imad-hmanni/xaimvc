@@ -368,7 +368,6 @@ class ContentRecommender:
 
         titles_str = "\n".join([f"- {t}" for t in top_titles])
 
-        
         prompt = f"""
         Tu es un expert en stratégie de contenu web et UX.
         Voici les titres des pages les plus performantes du site (données réelles) :
@@ -521,15 +520,35 @@ class UserJourneyAI:
 
         insights = []
 
-        # 1. Étape Engagement
-        drop_engagement = 100 - (scrolls / sessions * 100) if sessions > 0 else 0
+        # 1. Étape Engagement (CORRECTION : Gestion du cas où Scrolls > Sessions)
+        if sessions > 0:
+            if scrolls > sessions:
+                # Cas positif : Les utilisateurs lisent plusieurs pages
+                ratio_engagement = (scrolls / sessions)
+                diagnosis_text = f"Engagement Fort : {ratio_engagement:.1f} pages lues par session en moyenne."
+                drop_rate_text = "✅ Gain"
+                why_text = "Les visiteurs sont captifs et naviguent sur plusieurs pages (Multi-page journey)."
+                action_text = "Insérer des liens croisés (Cross-linking) pour maintenir cette dynamique."
+            else:
+                # Cas classique : Perte d'audience
+                drop_engagement = 100 - (scrolls / sessions * 100)
+                diagnosis_text = f"{int(drop_engagement)}% des visiteurs repartent sans lire."
+                drop_rate_text = f"{int(drop_engagement)}%" 
+                why_text = "Le haut de page (Titre/Image) n'accroche pas assez ou le chargement est lent."
+                action_text = "Améliorer l'accroche et le temps de chargement."
+        else:
+             diagnosis_text = "Pas de données."
+             drop_rate_text = "-"
+             why_text = ""
+             action_text = ""
+
         insights.append({
             "step": "1️⃣ Arrivée -> Lecture",
             "moment": "Dans les premières secondes",
-            "diagnosis": f"{int(drop_engagement)}% des visiteurs repartent sans lire.",
-            "drop_rate": f"{int(drop_engagement)}%", 
-            "why": "Le haut de page (Titre/Image) n'accroche pas assez ou le chargement est lent.",
-            "action": "Améliorer l'accroche et le temps de chargement."
+            "diagnosis": diagnosis_text,
+            "drop_rate": drop_rate_text, 
+            "why": why_text,
+            "action": action_text
         })
 
         # 2. Étape Intérêt
@@ -644,5 +663,3 @@ def generate_recommendations(df_events, trend_data, df_pages=None):
         })
 
     return recos
-
-
