@@ -104,7 +104,7 @@ def load_and_parse_data(file_bytes_io):
     events_data = []
     page_data_extracted = []
     
-    # Liste d'exclusion
+    # Liste d'exclusion MISE A JOUR
     invalid_page_titles = [
         "Organic Search", "Direct", "Referral", "Organic Social", "Unassigned", 
         "(not set)", "Email", "Paid Search", "Video", "Display", 
@@ -117,8 +117,6 @@ def load_and_parse_data(file_bytes_io):
         "Portail officiel du Maroc - Institutions, services en ligne, patrimoine | Maroc.ma", "Portail officiel du Maroc - Institutions, e-services, patrimoine | Maroc.ma",
         "Accueil - Ministère de la Jeunesse, de la Culture et de la Communication", "الرئيسية - وزارة الشباب والثقافة والتواصل", "Page non trouvée - وزارة الشباب والثقافة والتواصل",
         "يهدف موقع \"نية مغربية\" إلى متابعة أحدث التطورات والأخبار المتعلقة بكرة القدم المغربية", "“Niya Maghribiya” website provides a coverage of the latest", "Page non trouvée - Niya Maghribia"
-        , "الرئيسية - Le portail du Sahara Marocain - News" , "Accueil - News, info et actualité du Sahara Marocain", "Home - Le portail du Sahara Marocain - News", "Page non trouvée - Le portail du Sahara Marocain - News",
-        "Page non trouvée - Le portail du Sahara Marocain - News"
     ]
 
     reader = csv.reader(lines)
@@ -126,7 +124,8 @@ def load_and_parse_data(file_bytes_io):
         if not row: continue
         
         if len(row) >= 2:
-            name = row[0].strip()
+            # NETTOYAGE RENFORCÉ DU NOM (Espaces insécables)
+            name = row[0].strip().replace('\xa0', ' ')
             val_str = row[-1].strip().replace('\xa0', '').replace(' ', '')
             
             if val_str.isdigit():
@@ -283,22 +282,8 @@ class SemanticAnalyzer:
             'او', 'أو', 'بين', 'هي', 'هو', 'نحن', 'هم', 'كل', 'قد', 'كما', 'لها', 'له', 'فيه', 'منه',
             'عنه', 'بها', 'عليها', 'عليه', 'تلك', 'ذلك', 'و', 'ف', 'ب', 'ل'
         ]
-        # 4. ✅ Stopwords Espagnols (NOUVEAU)
-        stopwords_es = [
-            'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas',
-            'de', 'del', 'al', 'y', 'o', 'pero', 'porque',
-            'con', 'sin', 'sobre', 'entre', 'hasta', 'desde',
-            'que', 'como', 'cuando', 'donde', 'quien',
-            'yo', 'tú', 'él', 'ella', 'nosotros', 'vosotros', 'ellos',
-            'me', 'te', 'se', 'nos', 'os',
-            'es', 'son', 'era', 'fue', 'ser', 'estar', 'tener',
-            'muy', 'más', 'menos', 'también', 'ya', 'aún',
-            'siempre', 'nunca', 'sitio', 'página', 'inicio',
-            'web', 'portal', 'contacto', 'privacidad','condiciones', 'uso', 'acceso',
-            'login', 'registro', 'com', 'es'
-        ]
         
-        self.stopwords = stopwords_fr + stopwords_en + stopwords_ar + stopwords_es
+        self.stopwords = stopwords_fr + stopwords_en + stopwords_ar
 
     def extract_top_keywords(self, top_n=10):
         if self.df_pages.empty:
@@ -345,16 +330,16 @@ class SemanticAnalyzer:
 class ContentRecommender:
     def __init__(self, df_pages):
         self.df_pages = df_pages
-        self.GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"] # Note: Clé API fictive du prompt
+        self.GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]  # Note: Clé API fictive du prompt
 
     def get_content_suggestions_static(self):
         suggestions = [
             {
-                "segment": "",
-                "context": "",
-                "missing_content": "",
-                "reasoning": "",
-                "priority": ""
+                "segment": "Visiteurs pressés",
+                "context": "Taux de rebond élevé sur mobile",
+                "missing_content": "Infographie récapitulative",
+                "reasoning": "Le contenu actuel est trop dense.",
+                "priority": "Moyenne"
             },
         ]
         return suggestions
@@ -364,13 +349,11 @@ class ContentRecommender:
             return self.get_content_suggestions_static()
 
         top_titles = self.df_pages.head(15)['Titre'].tolist()
-        
-
         titles_str = "\n".join([f"- {t}" for t in top_titles])
 
         prompt = f"""
         Tu es un expert en stratégie de contenu web et UX.
-        Voici les titres des pages les plus performantes du site (données réelles) :
+        Voici les titres des pages les plus performantes du site 'Morocco Gaming Expo' (données réelles) :
         {titles_str}
 
         Analyse ces titres pour comprendre ce qui intéresse l'audience.
