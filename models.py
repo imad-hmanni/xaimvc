@@ -335,11 +335,11 @@ class ContentRecommender:
     def get_content_suggestions_static(self):
         suggestions = [
             {
-                "segment": "Visiteurs pressés",
-                "context": "Taux de rebond élevé sur mobile",
-                "missing_content": "Infographie récapitulative",
-                "reasoning": "Le contenu actuel est trop dense.",
-                "priority": "Moyenne"
+                "segment": "",
+                "context": "",
+                "missing_content": "",
+                "reasoning": "",
+                "priority": ""
             },
         ]
         return suggestions
@@ -353,7 +353,7 @@ class ContentRecommender:
 
         prompt = f"""
         Tu es un expert en stratégie de contenu web et UX.
-        Voici les titres des pages les plus performantes du site 'Morocco Gaming Expo' (données réelles) :
+        Voici les titres des pages les plus performantes du site (données réelles) :
         {titles_str}
 
         Analyse ces titres pour comprendre ce qui intéresse l'audience.
