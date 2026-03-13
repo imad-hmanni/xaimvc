@@ -393,7 +393,7 @@ class SemanticAnalyzer:
             'toujours', 'jamais', 'souvent', 'parfois', 'aujourd', 'hui', 'hier', 'demain', 'maintenant',
             'site', 'page', 'accueil', 'web', 'portail', 'home', 'index', 'contact', 'mentions',
             'légales', 'confidentialité', 'politique', 'conditions', 'utilisation', 'connexion',
-            'inscription', 'recherche', 'ma', 'com', 'fr',
+            'inscription', 'recherche', 'maroc', 'marocaine', 'marocain', 'ma', 'com', 'fr',
             'a', 'an', 'the', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
             'my', 'your', 'his', 'its', 'our', 'their', 'in', 'on', 'of', 'at', 'by', 'for', 'with', 'about',
             'في', 'من', 'إلى', 'عن', 'على', 'مع', 'بين', 'حتى', 'ال', 'و', 'ف', 'ب', 'ل', 'ك',
@@ -478,6 +478,7 @@ class SemanticAnalyzer:
         {topics_str}
         
         En te basant sur ce contexte existant, propose 30 NOUVEAUX mots-clés très puissants que le site devrait impérativement cibler dans ses prochains contenus pour générer encore plus de trafic ciblé.
+        CONTRAINTE STRICTE : Chaque mot-clé généré ne doit absolument PAS dépasser 3 mots au total (ex: "mot1 mot2 mot3").
         
         Réponds STRICTEMENT au format JSON (liste d'objets) suivant, sans markdown autour :
         [
