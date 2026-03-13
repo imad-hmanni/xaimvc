@@ -477,7 +477,7 @@ class SemanticAnalyzer:
         Voici les grandes thématiques qui intéressent l'audience actuelle : 
         {topics_str}
         
-        En te basant sur ce contexte existant, propose 10 NOUVEAUX mots-clés très puissants ou requêtes "longue traîne" (long-tail keywords) que le site devrait impérativement cibler dans ses prochains contenus pour générer encore plus de trafic ciblé.
+        En te basant sur ce contexte existant, propose 30 NOUVEAUX mots-clés très puissants que le site devrait impérativement cibler dans ses prochains contenus pour générer encore plus de trafic ciblé.
         
         Réponds STRICTEMENT au format JSON (liste d'objets) suivant, sans markdown autour :
         [
