@@ -1,434 +1,745 @@
+import pandas as pd
+import numpy as np
 import streamlit as st
-import plotly.express as px
-import plotly.graph_objects as go
-import textwrap
+from sklearn.linear_model import LinearRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from datetime import datetime, timedelta
+import csv
+import json
 
-# --- Configuration CSS ---
-def inject_custom_css():
-    st.markdown("""
-    <style>
-        .metric-card {
-            background-color: #f0f2f6;
-            padding: 20px;
-            border-radius: 10px;
-            border-left: 5px solid #c0392b;
-            box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
-        }
-        .xai-explanation {
-            background-color: #e8f8f5;
-            padding: 15px;
-            border-radius: 5px;
-            border: 1px solid #1abc9c;
-        }
-        h1, h2, h3 {
-            color: #2c3e50;
-        }
-        .stProgress > div > div > div > div {
-            background-color: #e74c3c;
-        }
-        .step-card {
-            background-color: white;
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-            border-bottom: 4px solid #ddd;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-        .step-arrow {
-            text-align: center;
-            font-size: 24px;
-            color: #7f8c8d;
-            margin-top: 30px;
-            font-weight: bold;
-        }
-        .download-card {
-            background-color: #e1f5fe;
-            padding: 20px;
-            border-radius: 8px;
-            text-align: center;
-            border-left: 5px solid #0288d1;
-            margin-top: 20px;
-            margin-bottom: 20px;
-        }
-    </style>
-    """, unsafe_allow_html=True)
+try:
+    from google import genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
 
-# --- Composants d'Affichage ---
+# --- 1. FONCTIONS DE CHARGEMENT ET DE PARSING ---
 
-def render_sidebar():
-    st.sidebar.header("📂 Configuration des Données")
-    st.sidebar.markdown("---")
+@st.cache_data
+def load_and_parse_data(file_bytes_io):
+    bytes_data = file_bytes_io.getvalue()
+    content_str = ""
     
-    st.sidebar.subheader("1. Données Temporelles")
-    st.sidebar.caption("Fichier 'Instantané' (Séries, User Journey)")
-    file_ts = st.sidebar.file_uploader("Upload Instantané.csv", type=['csv'], key="file_ts")
-    
-    st.sidebar.subheader("2. Données Contenu")
-    st.sidebar.caption("Fichier 'Pages et écrans' (Temps, Engagement)")
-    file_pages = st.sidebar.file_uploader("Upload Pages.csv", type=['csv'], key="file_pages")
-    
-    st.sidebar.markdown("---")
-    
-    st.sidebar.subheader("3. Paramètres IA")
-    prediction_horizon = st.sidebar.slider("Horizon de prédiction (Jours)", min_value=7, max_value=365, value=90, step=1)
-    
-    st.sidebar.markdown("---")
-    site_name = st.sidebar.text_input("Nom du Site / Portail", value="Site Web")
-    
-    return site_name, file_ts, file_pages, prediction_horizon
+    encodings = ['utf-8-sig', 'utf-16', 'utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+    for encoding in encodings:
+        try:
+            content_str = bytes_data.decode(encoding)
+            if "Utilisateurs" in content_str or "Vues" in content_str or "page_" in content_str:
+                break
+        except UnicodeDecodeError:
+            continue
+            
+    if not content_str:
+        content_str = bytes_data.decode('utf-8', errors='ignore')
 
-def render_kpi_tab(site_name, df_ts, df_events):
-    st.subheader(f"Vue d'ensemble : {site_name}")
-    col1, col2, col3, col4 = st.columns(4)
-    
-    total_users = df_ts['Utilisateurs actifs'].sum() if not df_ts.empty and 'Utilisateurs actifs' in df_ts.columns else 0
-    avg_users = df_ts['Utilisateurs actifs'].mean() if not df_ts.empty and 'Utilisateurs actifs' in df_ts.columns else 0
-    total_views = df_events[df_events['Nom événement'] == 'page_view']['Total'].sum() if not df_events.empty else 0
-    data_points = len(df_ts) if not df_ts.empty else 0
-    
-    col1.metric("Total Utilisateurs", f"{total_users:,.0f}")
-    col2.metric("Moyenne / Période", f"{avg_users:,.0f}")
-    col3.metric("Pages Vues", f"{total_views:,.0f}")
-    col4.metric("Données analysées", data_points)
-    
-    if not df_ts.empty and 'Date' in df_ts.columns and 'Utilisateurs actifs' in df_ts.columns:
-        fig = px.line(df_ts, x='Date', y='Utilisateurs actifs', title='Évolution Historique', markers=True, line_shape='spline')
-        fig.update_layout(plot_bgcolor='white')
-        st.plotly_chart(fig, use_container_width=True)
-        if df_ts['Date'].notna().any():
-            st.caption(f"Période affichée : du {df_ts['Date'].min().strftime('%d/%m/%Y')} au {df_ts['Date'].max().strftime('%d/%m/%Y')}")
-    else:
-        st.info("Graphique temporel indisponible (Données temporelles manquantes ou format non reconnu).")
+    lines = content_str.splitlines()
 
-def render_prediction_tab(df_ts, df_for_training, df_future, xai_data, df_trend=None):
-    st.subheader(f"Prédiction & Explicabilité")
+    auto_start_date = None
+    auto_end_date = None
     
-    # Conversion des prédictions en entiers pour un affichage propre (sans virgule)
-    if not df_future.empty:
-        df_future['Prédiction'] = df_future['Prédiction'].round().astype(int)
-    if df_trend is not None and not df_trend.empty:
-        df_trend['Tendance_IA'] = df_trend['Tendance_IA'].round().astype(int)
+    for line in lines[:20]:
+        if "Date de début" in line and ":" in line:
+            try:
+                date_str = line.split(":")[-1].strip()
+                auto_start_date = datetime.strptime(date_str, "%Y%m%d")
+            except: pass
+        if "Date de fin" in line and ":" in line:
+            try:
+                date_str = line.split(":")[-1].strip()
+                auto_end_date = datetime.strptime(date_str, "%Y%m%d")
+            except: pass
+
+    file_format = "snapshot"
+    header_map = {}
+    data_start_idx = 0
+    
+    for i, line in enumerate(lines[:50]):
+        if ("Chemin de la page" in line or "Titre de la page" in line) and "Vues" in line:
+            file_format = "detailed_report"
+            reader = csv.reader([line])
+            headers = next(reader)
+            for idx, col in enumerate(headers):
+                c = col.lower().strip()
+                if "chemin" in c or "titre" in c: header_map['title'] = idx
+                elif "vues" in c and "utilisateur" not in c: header_map['views'] = idx
+                elif "durée" in c and "engagement" in c: header_map['time'] = idx
+                elif "rebond" in c: header_map['bounce'] = idx
+                elif "vues par utilisateur" in c: header_map['views_per_user'] = idx
+            data_start_idx = i + 1
+            break
+
+    df_ts = pd.DataFrame()
+    df_events = pd.DataFrame()
+    df_pages = pd.DataFrame()
+    
+    if file_format == "detailed_report":
+        page_data_extracted = []
+        reader = csv.reader(lines[data_start_idx:])
         
-    col_pred, col_xai = st.columns([2, 1])
-    
-    with col_pred:
-        if not df_ts.empty and 'Date' in df_ts.columns and 'Utilisateurs actifs' in df_ts.columns:
-            fig_pred = go.Figure()
-            fig_pred.add_trace(go.Scatter(x=df_ts['Date'], y=df_ts['Utilisateurs actifs'], mode='lines', name='Historique Réel', line=dict(color='#2980b9', width=1)))
-            if df_trend is not None and not df_trend.empty:
-                fig_pred.add_trace(go.Scatter(x=df_trend['Date'], y=df_trend['Tendance_IA'], mode='lines', name='Tendance IA (Modèle)', line=dict(color='#f39c12', dash='solid', width=2)))
-            if not df_future.empty:
-                fig_pred.add_trace(go.Scatter(x=df_future['Date'], y=df_future['Prédiction'], mode='lines+markers', name='Prédiction Futur', line=dict(color='#e74c3c', dash='dot', width=3)))
-            
-            fig_pred.update_layout(title="Trajectoire IA : Passé (Tendance) et Futur (Prévision)", hovermode="x unified")
-            st.plotly_chart(fig_pred, use_container_width=True)
-            
-            # --- NOUVEAU BLOC : Affichage des métriques sous le graphique ---
-            if not df_future.empty:
-                total_pred = int(df_future['Prédiction'].sum())
-                avg_pred = int(df_future['Prédiction'].mean())
+        for row in reader:
+            if not row or len(row) < 2: continue
+            try:
+                name = row[header_map['title']].strip() if 'title' in header_map else "Inconnu"
                 
-                st.markdown("#### 📊 Résumé de la Prévision")
-                metric_col1, metric_col2 = st.columns(2)
-                with metric_col1:
-                    st.metric(label="Total Utilisateurs (Prévus)", value=f"{total_pred:,.0f}")
-                with metric_col2:
-                    st.metric(label="Moyenne par Période (Prévue)", value=f"{avg_pred:,.0f}")
+                views = 0
+                if 'views' in header_map:
+                    v_str = row[header_map['views']].replace('\xa0', '').replace(' ', '')
+                    if v_str.isdigit(): views = int(v_str)
+                
+                time_spent = 0
+                if 'time' in header_map:
+                    t_str = row[header_map['time']].strip()
+                    try:
+                        if '.' in t_str or (',' in t_str and ':' not in t_str):
+                            time_spent = float(t_str.replace(',', '.'))
+                        elif 'm' in t_str and 's' in t_str: 
+                            parts = t_str.replace('s','').split('m')
+                            time_spent = int(parts[0])*60 + int(parts[1])
+                        elif ':' in t_str:
+                            parts = t_str.split(':')
+                            if len(parts) == 3: time_spent = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
+                            elif len(parts) == 2: time_spent = int(parts[0])*60 + int(parts[1])
+                    except:
+                        time_spent = 0
+                
+                bounce_rate = 0
+                if 'bounce' in header_map:
+                    try:
+                        b_str = row[header_map['bounce']].strip().replace('%', '').replace(',', '.')
+                        bounce_rate = float(b_str)
+                        if bounce_rate <= 1 and bounce_rate > 0: bounce_rate = bounce_rate * 100
+                    except:
+                        bounce_rate = 0
+                else:
+                    views_per_user = 1.0
+                    if 'views_per_user' in header_map:
+                        try:
+                            vpu_str = row[header_map['views_per_user']].strip().replace(',', '.')
+                            views_per_user = float(vpu_str)
+                        except: pass
                     
+                    if views_per_user >= 1:
+                        bounce_rate = max(0.1, min(0.9, 1 / views_per_user))
+                        
+                    if time_spent > 30:
+                        bounce_rate *= 0.7 
+                    elif time_spent < 5:
+                        bounce_rate = max(bounce_rate, 0.9)
+                    
+                    bounce_rate = bounce_rate * 100
+
+                page_data_extracted.append([name, views, time_spent, bounce_rate])
+            except (IndexError, ValueError):
+                continue
+
+        if page_data_extracted:
+            df_pages = pd.DataFrame(page_data_extracted, columns=['Titre', 'Vues', 'Temps_Moyen', 'Taux_Rebond'])
+            df_pages = df_pages.sort_values('Vues', ascending=False).head(100) 
+            
+            dates = []
+            if auto_start_date and auto_end_date:
+                delta_days = (auto_end_date - auto_start_date).days
+                if delta_days >= 0:
+                    dates = [auto_start_date + timedelta(days=i) for i in range(delta_days + 1)]
+            
+            if not dates:
+                base_date = datetime.now()
+                dates = [base_date - timedelta(days=i) for i in range(30)]
+                dates.reverse() 
+                
+            df_ts = pd.DataFrame({
+                'Date_Reelle': dates,
+                'Utilisateurs actifs': [0] * len(dates) 
+            })
+            
+            total_views = df_pages['Vues'].sum()
+            df_events = pd.DataFrame([['page_view', total_views]], columns=['Nom événement', 'Total'])
+            
+            return df_ts, df_events, df_pages, auto_start_date, 1, False
+
+    ts_data = []
+    ts_section = False
+    time_step = 1 
+    
+    events_data = []
+    page_data_raw = []
+    
+    reader = csv.reader(lines)
+    
+    invalid_page_titles = [
+        "Organic Search", "Direct", "Referral", "Organic Social", "Unassigned", 
+        "(not set)", "Email", "Paid Search", "Video", "Display", 
+        "Utilisateurs", "Nouveaux utilisateurs", "Sessions", "page_view", "session_start", 
+        "scroll", "click", "view_search_results", "file_download", "user_engagement", 
+        "first_visit", "video_start"
+    ]
+
+    for row in reader:
+        if not row: continue
+        
+        if len(row) >= 2:
+            col0_lower = row[0].strip().lower()
+            col1_lower = row[1].strip().lower()
+            
+            if any(k in col1_lower for k in ["utilisateurs", "users"]) and any(kw in col0_lower for kw in ["nième", "nth", "date", "jour", "day", "semaine", "week", "mois", "month"]):
+                ts_section = True
+                if "semaine" in col0_lower or "week" in col0_lower: time_step = 7
+                elif "mois" in col0_lower or "month" in col0_lower: time_step = 30
+                else: time_step = 1
+                continue 
+            
+        if ts_section:
+            if not row[0].strip() or row[0].startswith('#'):
+                ts_section = False
+            else:
+                ts_data.append(row[:2])
+                continue
+
+        if len(row) >= 2:
+            name = row[0].strip().replace('\xa0', ' ')
+            val_str = row[-1].strip().replace('\xa0', '').replace(' ', '')
+            
+            if val_str.isdigit():
+                val = int(val_str)
+                
+                if name in ["page_view", "session_start", "scroll", "click", "file_download", "form_start", "form_submit", "view_search_results", "video_start", "user_engagement", "first_visit"]:
+                    events_data.append([name, val])
+                
+                elif (len(name) > 4 and 
+                      name not in invalid_page_titles and 
+                      not name.startswith('00') and 
+                      not name.startswith('#') and
+                      not name.isdigit() and
+                      "Date" not in name and
+                      "Nième" not in name):
+                    
+                    page_data_raw.append({'row': row, 'name': name, 'views': val})
+
+    if ts_data:
+        df_ts = pd.DataFrame(ts_data, columns=['Index_Temporel', 'Utilisateurs actifs'])
+        df_ts['Utilisateurs actifs'] = pd.to_numeric(df_ts['Utilisateurs actifs'].astype(str).str.replace(r'\s+', '', regex=True), errors='coerce')
+        if df_ts['Index_Temporel'].astype(str).str.isnumeric().all():
+             df_ts['Index_Temporel'] = pd.to_numeric(df_ts['Index_Temporel'], errors='coerce')
         else:
-            st.warning("Pas assez de données historiques pour afficher une prédiction fiable.")
-        
-    with col_xai:
-        st.markdown("### 🔍 Pourquoi cette prédiction ?")
-        with st.container(border=True):
-            st.markdown(f"**1. Tendance Globale :**\n\n{xai_data['tendance']}")
-            st.caption("*(La ligne orange montre la direction générale calculée par l'IA, sans le bruit quotidien.)*")
-            
-            st.markdown("---")
-            
-            st.markdown(f"**2. Analyse du Modèle :**\n\n{xai_data['detail_tendance']}")
-            
-            st.markdown("---")
-            
-            st.markdown(f"**3. Caractéristique des données :**\n\n{xai_data['facteur_cle']}")
+             try:
+                df_ts['Date_Reelle'] = pd.to_datetime(df_ts['Index_Temporel'], format='%Y%m%d', errors='coerce')
+             except:
+                df_ts['Date_Reelle'] = pd.to_datetime(df_ts['Index_Temporel'], errors='coerce')
+             df_ts = df_ts.dropna(subset=['Date_Reelle']).sort_values('Date_Reelle')
+             time_step = 0 
+        df_ts = df_ts.dropna(subset=['Utilisateurs actifs'])
 
-def render_nlp_tab(nlp_engine, is_fallback):
-    st.subheader("🧠 Analyse Sémantique")
-    if is_fallback:
-        st.warning("⚠️ Les titres de pages réels n'ont pas été détectés. Analyse basée sur des données génériques.")
+    df_events = pd.DataFrame(events_data, columns=['Nom événement', 'Total'])
+    if not df_events.empty:
+        df_events = df_events.groupby('Nom événement', as_index=False)['Total'].sum()
+
+    global_bounce_rate = 50.0 
+    if not df_events.empty:
+        total_sessions = df_events[df_events['Nom événement'] == 'session_start']['Total'].sum()
+        total_scrolls = df_events[df_events['Nom événement'] == 'scroll']['Total'].sum()
+        if total_sessions > 0 and total_scrolls > 0:
+            bounce_val = max(0, min(1, 1 - (total_scrolls / total_sessions)))
+            global_bounce_rate = bounce_val * 100
+
+    page_data_processed = []
+    for item in page_data_raw:
+        row = item['row']
+        name = item['name']
+        views = item['views']
+        time_spent = 0
+        bounce_rate = 0
+        
+        if len(row) > 2:
+             for col in row[1:]:
+                 col_str = col.strip()
+                 if ':' in col_str or ('m' in col_str and 's' in col_str):
+                     try:
+                         if 'm' in col_str and 's' in col_str:
+                             parts = col_str.replace('s','').split('m')
+                             time_spent = int(parts[0])*60 + int(parts[1])
+                         elif ':' in col_str:
+                             parts = col_str.split(':')
+                             if len(parts) == 3: time_spent = int(parts[0])*3600 + int(parts[1])*60 + int(parts[2])
+                             elif len(parts) == 2: time_spent = int(parts[0])*60 + int(parts[1])
+                     except: pass
+                 elif '%' in col_str:
+                     try:
+                         val_pct = float(col_str.replace('%', '').replace(',', '.').strip())
+                         if val_pct <= 1: val_pct = val_pct * 100
+                         bounce_rate = val_pct
+                     except: pass
+        
+        if bounce_rate == 0: bounce_rate = global_bounce_rate
+        page_data_processed.append([name, views, time_spent, bounce_rate])
+
+    is_fallback_data = False
+    if page_data_processed:
+        df_pages = pd.DataFrame(page_data_processed, columns=['Titre', 'Vues', 'Temps_Moyen', 'Taux_Rebond'])
+        df_pages = df_pages.drop_duplicates(subset=['Titre'])
+        df_pages = df_pages.sort_values('Vues', ascending=False).head(50) 
+    else:
+        is_fallback_data = True
+        df_pages = pd.DataFrame([["Accueil (Générique)", 1000, 60, 50.0]], columns=['Titre', 'Vues', 'Temps_Moyen', 'Taux_Rebond'])
     
-    col_keywords, col_topics = st.columns(2)
+    return df_ts, df_events, df_pages, auto_start_date, time_step, is_fallback_data
+
+# --- 2. MOTEUR ML & XAI ---
+
+class XAIEngine:
+    def __init__(self, df):
+        self.df = df if (df is not None and not df.empty and 'Utilisateurs actifs' in df.columns) else pd.DataFrame()
+        self.model = None
+        self.trend = None
     
-    df_kw = nlp_engine.extract_top_keywords()
-    topics = nlp_engine.identify_topics()
-    
-    with col_keywords:
-        st.markdown("#### 🔑 Mots-clés les plus performants")
-        if not df_kw.empty:
-            fig_kw = px.bar(df_kw, x='Fréquence', y='Mot-clé', orientation='h', color='Fréquence', color_continuous_scale='Viridis')
-            fig_kw.update_layout(yaxis={'categoryorder':'total ascending'})
-            st.plotly_chart(fig_kw, use_container_width=True)
+    def is_valid(self):
+        return not self.df.empty and len(self.df) >= 2 and 'Utilisateurs actifs' in self.df.columns
+
+    def train_model(self):
+        if not self.is_valid():
+            self.trend = None
+            return
+
+        X = np.arange(len(self.df)).reshape(-1, 1)
+        y = self.df['Utilisateurs actifs'].values
+        
+        self.lin_model = LinearRegression()
+        self.lin_model.fit(X, y)
+        
+        self.rf_model = RandomForestRegressor(n_estimators=100, random_state=42)
+        self.rf_model.fit(X, y)
+        
+        self.trend = self.lin_model.coef_[0]
+        
+    def predict_future(self, days=90, step_delta=timedelta(days=1)):
+        if not self.is_valid() or self.trend is None:
+            return pd.DataFrame(columns=['Date', 'Prédiction'])
+
+        step_days = step_delta.days
+        steps = int(days / step_days) if step_days > 0 else days
+        if steps < 1: steps = 1
+
+        last_idx = len(self.df)
+        future_idx = np.arange(last_idx, last_idx + steps).reshape(-1, 1)
+        
+        pred_lin = self.lin_model.predict(future_idx)
+        pred_rf = self.rf_model.predict(future_idx)
+        predictions = (pred_lin + pred_rf) / 2
+        
+        predictions = np.maximum(predictions, 0)
+        
+        last_date = self.df['Date'].max()
+        dates = [last_date + (step_delta * i) for i in range(1, steps + 1)]
+        
+        return pd.DataFrame({'Date': dates, 'Prédiction': predictions})
+
+    def get_historical_trend(self):
+        if not self.is_valid() or self.trend is None:
+            return pd.DataFrame(columns=['Date', 'Tendance_IA'])
+        X = np.arange(len(self.df)).reshape(-1, 1)
+        pred_lin = self.lin_model.predict(X)
+        pred_rf = self.rf_model.predict(X)
+        pred_trend = (pred_lin + pred_rf) / 2
+        
+        return pd.DataFrame({'Date': self.df['Date'], 'Tendance_IA': pred_trend})
+
+    def explain_prediction(self):
+        if not self.is_valid() or self.trend is None:
+            return {"tendance": "Données insuffisantes ou absentes", "detail_tendance": "Le fichier exporté ne contient pas de données temporelles reconnues.", "facteur_cle": ""}
+
+        explanation = {"tendance": "", "facteur_cle": "", "fiabilite": ""}
+        
+        if self.trend > 50:
+            explanation["tendance"] = "Forte Croissance 📈"
+            detail = f"Le modèle détecte une augmentation structurelle d'environ {int(self.trend)} utilisateurs par période."
+        elif self.trend > 0:
+            explanation["tendance"] = "Légère Croissance ↗️"
+            detail = "La tendance est positive mais stable."
+        elif self.trend > -50:
+            explanation["tendance"] = "Légère Baisse ↘️"
+            detail = "On observe un effritement lent de l'audience."
         else:
-            st.info("Pas assez de données textuelles.")
+            explanation["tendance"] = "Déclin Marqué 📉"
+            detail = f"Perte moyenne de {abs(int(self.trend))} utilisateurs par période."
             
-    with col_topics:
-        st.markdown("#### 📚 Thématiques Identifiées")
+        explanation["detail_tendance"] = detail
         
-        if st.button("✨ Expliquer le sens caché (IA)", key="explain_topics_btn"):
-            with st.spinner("L'IA analyse le sens des thématiques..."):
-                st.session_state.topic_explanations = nlp_engine.explain_topics(topics)
-
-        explanations = st.session_state.get('topic_explanations', {})
-
-        for t in topics:
-            parts = t.split(' : ')
-            title = parts[0].strip()
-            content = parts[1] if len(parts) > 1 else ""
+        std_dev = self.df['Utilisateurs actifs'].std()
+        mean = self.df['Utilisateurs actifs'].mean()
+        cv = std_dev / mean if mean > 0 else 0
+        
+        if cv > 0.2:
+            explanation["facteur_cle"] = "Volatilité Haute : L'audience varie fortement selon la période."
+        else:
+            explanation["facteur_cle"] = "Stabilité : L'audience est régulière."
             
-            explanation_html = ""
-            if explanations and title in explanations:
-                exp_text = explanations[title]
-                explanation_html = f"""
-                <div style='margin-top: 12px; padding: 10px; background-color: #fdf2e9; border-left: 3px solid #e67e22; border-radius: 4px; font-size: 0.95em; color: #333;'>
-                    <strong>🤖 Explication IA :</strong><br>{exp_text}
-                </div>
-                """
+        return explanation
+
+# --- 2c. MOTEUR NLP & SÉMANTIQUE ---
+class SemanticAnalyzer:
+    def __init__(self, df_pages):
+        self.df_pages = df_pages
+        self.GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "") 
+        self.stopwords = [
+            'le', 'la', 'les', 'un', 'une', 'des', 'du', 'de', 'd', 'ce', 'cet', 'cette', 'ces', 'mon', 'ton', 'son',
+            'ma', 'ta', 'sa', 'mes', 'tes', 'ses', 'notre', 'votre', 'leur', 'nos', 'vos', 'leurs',
+            'je', 'tu', 'il', 'elle', 'on', 'nous', 'vous', 'ils', 'elles', 'me', 'te', 'se', 'lui', 'leur', 'y', 'en',
+            'à', 'au', 'aux', 'dans', 'par', 'pour', 'sur', 'avec', 'sans', 'sous', 'entre', 'chez', 'vers', 'contre',
+            'et', 'ou', 'mais', 'donc', 'or', 'ni', 'car', 'est', 'sont', 'été', 'être', 'avoir', 'a', 'ont',
+            'fait', 'faire', 'faites', 'peut', 'peuvent', 'très', 'plus', 'moins', 'aussi', 'déjà', 'encore',
+            'toujours', 'jamais', 'souvent', 'parfois', 'aujourd', 'hui', 'hier', 'demain', 'maintenant',
+            'site', 'page', 'accueil', 'web', 'portail', 'home', 'index', 'contact', 'mentions',
+            'légales', 'confidentialité', 'politique', 'conditions', 'utilisation', 'connexion',
+            'inscription', 'recherche', 'ma', 'com', 'fr',
+            'a', 'an', 'the', 'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'him', 'her', 'us', 'them',
+            'my', 'your', 'his', 'its', 'our', 'their', 'in', 'on', 'of', 'at', 'by', 'for', 'with', 'about',
+            'في', 'من', 'إلى', 'عن', 'على', 'مع', 'بين', 'حتى', 'ال', 'و', 'ف', 'ب', 'ل', 'ك',
+            'هو', 'هي', 'هم', 'هن', 'أنا', 'نحن', 'أنت', 'أنتم', 'هذا', 'هذه', 'ذلك', 'تلك', 'هؤلاء'
+        ]
+
+    def extract_top_keywords(self, top_n=10):
+        if self.df_pages.empty:
+            return pd.DataFrame()
+        clean_titles = self.df_pages['Titre'].astype(str).fillna('')
+        vectorizer = CountVectorizer(stop_words=self.stopwords, ngram_range=(1, 2), min_df=1)
+        try:
+            X = vectorizer.fit_transform(clean_titles)
+            words = vectorizer.get_feature_names_out()
+            counts = X.sum(axis=0).A1
+            df_keywords = pd.DataFrame({'Mot-clé': words, 'Fréquence': counts})
+            df_keywords = df_keywords.sort_values('Fréquence', ascending=False).head(top_n)
+            return df_keywords
+        except ValueError:
+            return pd.DataFrame()
+
+    def identify_topics(self, n_topics=5):
+        if self.df_pages.empty or len(self.df_pages) < n_topics:
+            return ["Pas assez de données pour le Topic Modeling"]
+        try:
+            vectorizer = CountVectorizer(stop_words=self.stopwords, max_features=1000)
+            X = vectorizer.fit_transform(self.df_pages['Titre'].astype(str))
+            lda = LatentDirichletAllocation(n_components=n_topics, random_state=42)
+            lda.fit(X)
+            feature_names = vectorizer.get_feature_names_out()
+            topics = []
+            for topic_idx, topic in enumerate(lda.components_):
+                top_features_ind = topic.argsort()[:-6:-1]
+                topic_words = [feature_names[i] for i in top_features_ind]
+                topics.append(f"Thématique {topic_idx+1} : " + ", ".join(topic_words))
+            return topics
+        except:
+            return ["Erreur lors de l'analyse thématique (données insuffisantes)"]
+
+    def explain_topics(self, topics_list):
+        if not GEMINI_AVAILABLE or not self.GEMINI_API_KEY:
+            return {}
+        
+        topics_str = "\n".join(topics_list)
+        prompt = f"""
+        Tu es un expert en analyse sémantique et comportement utilisateur.
+        Voici des "Thématiques" (clusters de mots-clés) extraites des pages les plus visitées d'un portail web :
+        {topics_str}
+
+        Pour chaque thématique, analyse les mots-clés et rédige un petit paragraphe (2 à 3 lignes) expliquant clairement de quel sujet concret il s'agit et ce qui intéresse vraiment les visiteurs derrière ces mots.
+
+        Réponds STRICTEMENT au format JSON suivant :
+        {{
+            "Thématique 1": "Ton explication de 2-3 lignes ici...",
+            "Thématique 2": "Ton explication de 2-3 lignes ici..."
+        }}
+        """
+        try:
+            client = genai.Client(api_key=self.GEMINI_API_KEY)
+            model = "gemini-2.5-flash"
+            response = client.models.generate_content(model=model, contents=prompt)
+            json_str = response.text.replace("```json", "").replace("```", "").strip()
+            return json.loads(json_str)
+        except Exception as e:
+            return {}
+
+    # --- NOUVELLE FONCTION : GÉNÉRATION DE MOTS-CLÉS PUISSANTS ---
+    def generate_powerful_keywords(self, top_keywords, topics_list):
+        if not GEMINI_AVAILABLE or not self.GEMINI_API_KEY:
+            return []
+        
+        kw_str = ", ".join(top_keywords) if isinstance(top_keywords, list) else str(top_keywords)
+        topics_str = "\n".join(topics_list)
+        
+        prompt = f"""
+        Tu es un expert SEO et stratégie de contenu digital.
+        
+        Voici les mots-clés organiques qui performent déjà très bien sur le site : 
+        [{kw_str}]
+        
+        Voici les grandes thématiques qui intéressent l'audience actuelle : 
+        {topics_str}
+        
+        En te basant sur ce contexte existant, propose 30 NOUVEAUX mots-clés très puissants que le site devrait impérativement cibler dans ses prochains contenus pour générer encore plus de trafic ciblé.
+        
+        Réponds STRICTEMENT au format JSON (liste d'objets) suivant, sans markdown autour :
+        [
+            {{
+                "mot_cle": "Le mot clé puissant proposé",
+                "raison": "Pourquoi c'est pertinent et pourquoi ça va marcher",
+                "potentiel": "Élevé ou Très Élevé"
+            }}
+        ]
+        """
+        try:
+            client = genai.Client(api_key=self.GEMINI_API_KEY)
+            model = "gemini-2.5-flash"
+            response = client.models.generate_content(model=model, contents=prompt)
+            json_str = response.text.replace("```json", "").replace("```", "").strip()
+            return json.loads(json_str)
+        except Exception as e:
+            return []
+
+# --- 2d. MOTEUR RECOMMANDATION DYNAMIQUE ---
+class ContentRecommender:
+    def __init__(self, df_pages):
+        self.df_pages = df_pages
+        self.GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "") 
+
+    def get_content_suggestions_static(self):
+        return [{"segment": "", "context": "", "missing_content": "", "reasoning": "", "priority": ""}]
+
+    def generate_gemini_suggestions(self):
+        if not GEMINI_AVAILABLE:
+            return self.get_content_suggestions_static()
+
+        top_titles = self.df_pages.head(15)['Titre'].tolist()
+        titles_str = "\n".join([f"- {t}" for t in top_titles])
+        prompt = f"""Tu es un expert en stratégie de contenu web.
+        Titres : {titles_str}
+        Propose 10 IDÉES. Réponds UNIQUEMENT au format JSON :
+        [{{ "segment": "", "context": "", "missing_content": "", "reasoning": "", "priority": "Haute" }}]"""
+        try:
+            client = genai.Client(api_key=self.GEMINI_API_KEY)
+            model = "gemini-2.5-flash"
+            response = client.models.generate_content(model=model, contents=prompt)
+            json_str = response.text.replace("```json", "").replace("```", "").strip()
+            return json.loads(json_str)
+        except Exception as e:
+            return [{"segment": "Erreur", "context": "", "missing_content": f"{str(e)}", "reasoning": "", "priority": ""}]
+
+# --- 2e. MOTEUR D'OPTIMISATION DE CONTENU ---
+class ContentOptimizer:
+    def __init__(self, df_pages):
+        self.df = df_pages.copy()
+        
+    def analyze_content_performance(self):
+        if self.df.empty or len(self.df) < 5:
+            return self.df, None
+        features = ['Vues', 'Temps_Moyen', 'Taux_Rebond']
+        self.df[features] = self.df[features].fillna(self.df[features].mean())
+        X = self.df[features].values
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        n_clusters = min(4, len(self.df))
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        self.df['Cluster'] = kmeans.fit_predict(X_scaled)
+        cluster_summary = self.df.groupby('Cluster')[features].mean()
+        labels = {}; descriptions = {}; actions = {}; colors = {}
+        avg_views = self.df['Vues'].mean()
+        avg_time = self.df['Temps_Moyen'].mean()
+        for c_id in cluster_summary.index:
+            stats = cluster_summary.loc[c_id]
+            if stats['Vues'] > avg_views and stats['Temps_Moyen'] > avg_time:
+                labels[c_id] = "🌟 Contenu Star"; descriptions[c_id] = "Fort trafic, forte lecture."; actions[c_id] = "A maintenir en page d'accueil."; colors[c_id] = "#2ecc71"
+            elif stats['Vues'] > avg_views and stats['Temps_Moyen'] < avg_time:
+                labels[c_id] = "📉 Trafic sans Engagement"; descriptions[c_id] = "Beaucoup de clics, peu de lecture."; actions[c_id] = "Optimiser le contenu."; colors[c_id] = "#e67e22"
+            elif stats['Vues'] < avg_views and stats['Temps_Moyen'] > avg_time:
+                labels[c_id] = "💎 Pépites Cachées"; descriptions[c_id] = "Peu vu, mais très apprécié."; actions[c_id] = "A diffuser sur les réseaux."; colors[c_id] = "#3498db"
+            else:
+                labels[c_id] = "💤 Contenu Dormant"; descriptions[c_id] = "Faible performance globale."; actions[c_id] = "A archiver."; colors[c_id] = "#e74c3c"
+        self.df['Label'] = self.df['Cluster'].map(labels)
+        self.df['Description_IA'] = self.df['Cluster'].map(descriptions)
+        self.df['Action_IA'] = self.df['Cluster'].map(actions)
+        self.df['Color'] = self.df['Cluster'].map(colors)
+        return self.df, labels
+
+# --- 2f. USER JOURNEY ---
+class UserJourneyAI:
+    def __init__(self, df_events):
+        self.df_events = df_events
+        self.interest_type = "Début Formulaire"
+        self.conversion_type = "Formulaire Validé"
+
+    def get_count(self, event_name_list):
+        if isinstance(event_name_list, str):
+            event_name_list = [event_name_list]
+        total = 0
+        for event in event_name_list:
+            matches = self.df_events[self.df_events['Nom événement'].str.lower() == event.lower()]
+            if not matches.empty:
+                total += matches['Total'].sum()
+        return total
+
+    def get_journey_stats(self):
+        sessions = self.get_count(['session_start'])
+        scrolls = self.get_count(['scroll'])
+        
+        form_starts = self.get_count(['form_start'])
+        if form_starts == 0:
+            form_starts = self.get_count(['click'])
+            self.interest_type = "Clics d'intérêt"
+        else:
+            self.interest_type = "Début Formulaire"
             
-            st.markdown(f"""
-                <div style="background-color: white; padding: 15px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #3498db; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                    <h5 style="margin-top: 0; margin-bottom: 5px; color: #2c3e50;">{title}</h5>
-                    <span style="color: #7f8c8d; font-size: 0.9em;"><em>Mots-clés bruts : {content}</em></span>
-                    {explanation_html}
-                </div>
-            """, unsafe_allow_html=True)
-            
-    # --- BLOC : GÉNÉRATION DE MOTS CLÉS PUISSANTS ---
-    st.markdown("---")
-    st.markdown("### 🚀 Opportunités SEO & Mots-clés")
-    st.write("Demandez à l'Intelligence Artificielle d'étudier vos mots-clés actuels et vos thématiques pour vous suggérer de nouveaux mots-clés performants à intégrer dans vos futurs contenus.")
-    
-    if st.button("💡 Propose-moi des mots-clés puissants pour mon site", key="generate_kw_btn"):
-        with st.spinner("Génération des mots-clés SEO en cours..."):
-            top_kw_list = df_kw['Mot-clé'].tolist() if not df_kw.empty else []
-            st.session_state.powerful_keywords = nlp_engine.generate_powerful_keywords(top_kw_list, topics)
-            
-    if 'powerful_keywords' in st.session_state and st.session_state.powerful_keywords:
-        st.success("🎯 Voici les recommandations stratégiques générées par Gemini :")
+        conversions = self.get_count(['form_submit'])
+        if conversions == 0:
+             conversions = self.get_count(['video_progress', 'video_complete'])
+             self.conversion_type = "Engagement Vidéo"
+        else:
+             self.conversion_type = "Formulaire Validé"
+             
+        downloads = self.get_count(['file_download'])
         
-        # Affichage stylisé des mots clés
-        cols = st.columns(2)
-        for idx, kw in enumerate(st.session_state.powerful_keywords):
-            target_col = cols[idx % 2]
-            with target_col:
-                st.markdown(f"""
-                <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 15px; border-left: 4px solid #2ecc71; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <strong style="font-size: 1.1em; color: #2c3e50;">🔑 {kw.get('mot_cle', '')}</strong> 
-                        <span style="background-color: #e8f8f5; color: #27ae60; padding: 3px 8px; border-radius: 12px; font-size: 0.8em; font-weight: bold;">{kw.get('potentiel', 'Élevé')}</span>
-                    </div>
-                    <span style="color: #555; font-size: 0.9em; line-height: 1.4;">{kw.get('raison', '')}</span>
-                </div>
-                """, unsafe_allow_html=True)
-
-
-def render_personalization_tab(recommender, is_fallback):
-    st.subheader("🎨 Personnalisation Dynamique : Suggestions de Contenu (IA)")
-    st.markdown("L'IA analyse vos titres de pages réels et utilise **(IA DeepMind)** pour inventer des opportunités.")
-    
-    if is_fallback:
-        st.warning("⚠️ Analyse basée sur des données génériques.")
-        
-    if st.button("✨ Lancer la Suggestion (IA)"):
-        with st.spinner("Analyse des pages et génération des idées..."):
-            st.session_state.gemini_suggestions = recommender.generate_gemini_suggestions()
-
-    suggestions = st.session_state.get('gemini_suggestions')
-
-    if not suggestions: 
-         st.caption("Cliquez sur le bouton pour utiliser Gemini.")
-    else:
-        for s in suggestions:
-            if not s.get('missing_content'): continue 
-            with st.container(border=True):
-                col_seg, col_prio = st.columns([3, 1])
-                with col_seg:
-                    st.subheader(f"🎯 Pour : {s.get('segment', 'Segment')}")
-                    st.markdown(f"**Contexte observé :** *{s.get('context', '')}*")
-                with col_prio:
-                    prio = s.get('priority', 'Moyenne')
-                    color = "red" if prio in ["Critique", "Haute"] else "blue"
-                    st.markdown(f":{color}[**Priorité : {prio}**]")
-                
-                st.info(f"💡 **Idée de Contenu à Créer :**\n\n### {s.get('missing_content', '')}")
-                st.success(f"🧠 **Pourquoi ? (XAI) :** {s.get('reasoning', '')}")
-
-def render_audit_tab(df_optimized, cluster_labels, is_fallback):
-    st.subheader("⚙️ Audit de Contenu Automatisé (IA)")
-    if is_fallback:
-        st.warning("⚠️ Données simulées pour l'audit.")
-        
-    if cluster_labels:
-        groups = df_optimized.groupby('Label')
-        display_order = ["🌟 Contenu Star", "💎 Pépites Cachées", "📉 Trafic sans Engagement", "💤 Contenu Dormant"]
-        col1, col2 = st.columns(2)
-        
-        for i, label in enumerate(display_order):
-            if label in groups.groups:
-                group_data = groups.get_group(label)
-                first_item = group_data.iloc[0]
-                count = len(group_data)
-                color = first_item['Color']
-                
-                target_col = col1 if i % 2 == 0 else col2
-                with target_col:
-                    st.markdown(f"""
-                    <div style="border: 1px solid {color}; border-radius: 10px; padding: 20px; margin-bottom: 20px; background-color: white; border-top: 5px solid {color};">
-                        <h3 style="color: {color}; margin-top:0;">{label}</h3>
-                        <p style="font-size: 1.2em; font-weight: bold;">{count} pages concernées</p>
-                        <p style="font-style: italic; color: #555;">"{first_item['Description_IA']}"</p>
-                        <hr style="margin: 10px 0;">
-                        <p><strong>👉 Action Recommandée :</strong></p>
-                        <p style="background-color: {color}20; padding: 10px; border-radius: 5px; color: {color}; font-weight: bold;">{first_item['Action_IA']}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    with st.expander(f"Voir les pages '{label}'"):
-                        st.dataframe(group_data[['Titre', 'Vues', 'Temps_Moyen', 'Taux_Rebond']].sort_values('Vues', ascending=False), use_container_width=True, hide_index=True)
-    else:
-        st.info("Pas assez de données pour segmenter le contenu.")
-
-def render_journey_tab(journey_ai):
-    st.subheader("📍 Analyse des Points de Rupture (User Journey)")
-    stats = journey_ai.get_journey_stats()
-    
-    if stats['sessions'] > 0:
-        st.markdown("#### 📉 Entonnoir de Conversion (Formulaires strictement)")
-        col_s1, col_a1, col_s2, col_a2, col_s3, col_a3, col_s4 = st.columns([2,0.5,2,0.5,2,0.5,2])
-        with col_s1: st.markdown(f"<div class='step-card' style='border-bottom: 4px solid #3498db;'><h4 style='margin:0; color:#3498db;'>1. Arrivée</h3><h2 style='margin:10px 0;'>{int(stats['sessions'])}</h2></div>", unsafe_allow_html=True)
-        with col_a1: st.markdown("<div class='step-arrow'>➔</div>", unsafe_allow_html=True)
-        with col_s2: st.markdown(f"<div class='step-card' style='border-bottom: 4px solid #f1c40f;'><h4 style='margin:0; color:#f1c40f;'>2. Lecture</h3><h2 style='margin:10px 0;'>{int(stats['scrolls'])}</h2></div>", unsafe_allow_html=True)
-        with col_a2: st.markdown("<div class='step-arrow'>➔</div>", unsafe_allow_html=True)
-        with col_s3: st.markdown(f"<div class='step-card' style='border-bottom: 4px solid #e67e22;'><h4 style='margin:0; color:#e67e22;'>3. {journey_ai.interest_type}</h4><h2 style='margin:10px 0;'>{stats['form_starts']}</h2></div>", unsafe_allow_html=True)
-        with col_a3: st.markdown("<div class='step-arrow'>➔</div>", unsafe_allow_html=True)
-        with col_s4: st.markdown(f"<div class='step-card' style='border-bottom: 4px solid #2ecc71;'><h4 style='margin:0; color:#2ecc71;'>4. {journey_ai.conversion_type}</h4><h2 style='margin:10px 0;'>{stats['conversions']}</h2></div>", unsafe_allow_html=True)
-
-        if stats.get('downloads', 0) > 0:
-            st.markdown(f"""
-            <div class="download-card">
-                <h3 style="margin:0; color: #01579b;">📥 Fichiers Téléchargés</h3>
-                <p style="font-size: 1.2em; margin-top:5px; margin-bottom: 0;">En parallèle, vos utilisateurs ont généré <strong>{stats['downloads']} téléchargements</strong> de documents PDF ou autres.</p>
-            </div>
-            """, unsafe_allow_html=True)
-        st.markdown("---")
-
-        st.markdown("#### 🕵️‍♂️ Diagnostic des Pertes (IA)")
-        insights = journey_ai.analyze_journey()
-        for insight in insights:
-            with st.container(border=True):
-                c1, c2 = st.columns([3, 1])
-                with c1:
-                    st.subheader(f"{insight['step']}")
-                    st.markdown(f"**⏰ Moment :** *{insight['moment']}*")
-                    st.warning(f"**⚠️ Problème :** {insight['diagnosis']}")
-                with c2:
-                    st.metric("Fuite (Drop-off)", insight['drop_rate'])
-                st.success(f"**💡 Cause Probable (XAI) :** {insight['why']}")
-                st.info(f"**🛠️ Action Recommandée :** {insight['action']}")
-    else:
-        st.warning("Données insuffisantes pour tracer le parcours utilisateur (Besoin du fichier Instantané/Séries).")
-
-
-# --- CHAT FLOTTANT ÉPURÉ ---
-def render_floating_chat(chat_engine):
-    st.markdown("""
-    <style>
-        /* Conteneur principal figé en bas à droite */
-        div[data-testid="stPopover"] {
-            position: fixed !important;
-            bottom: 30px !important;
-            right: 30px !important;
-            z-index: 999999 !important;
-            width: fit-content !important; 
-            height: fit-content !important;
+        return {
+            "sessions": sessions,
+            "scrolls": scrolls,
+            "form_starts": form_starts,
+            "conversions": conversions,
+            "downloads": downloads
         }
-        
-        /* Bulle de chat parfaitement ronde */
-        div[data-testid="stPopover"] > button {
-            background-color: #e74c3c !important;
-            border-radius: 50% !important;
-            width: 65px !important;
-            height: 65px !important;
-            min-width: 65px !important;
-            min-height: 65px !important;
-            border: 3px solid white !important;
-            box-shadow: 0 6px 16px rgba(0,0,0,0.3) !important;
-            padding: 0 !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            transition: transform 0.3s ease, background-color 0.3s ease !important;
-        }
-        
-        /* L'émoji dans le bouton natif Streamlit */
-        div[data-testid="stPopover"] > button p {
-            font-size: 32px !important;
-            margin: 0 !important;
-            line-height: 1 !important;
-        }
-        
-        /* Animation au survol */
-        div[data-testid="stPopover"] > button:hover {
-            transform: scale(1.1) !important;
-            background-color: #c0392b !important;
-        }
-        
-        /* Fenêtre de dialogue fixe (Taille unique) */
-        div[data-testid="stPopoverBody"] {
-            position: fixed !important; 
-            bottom: 110px !important; /* Apparait juste au-dessus du bouton */
-            right: 30px !important;
-            width: 360px !important;
-            height: 520px !important;
-            border-radius: 15px !important;
-            padding: 15px !important;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2) !important;
-        }
-    </style>
-    """, unsafe_allow_html=True)
 
-    # Initialisation de la conversation
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = [{"role": "assistant", "content": "Bonjour ! Je suis l'IA Explicatif. Posez-moi vos questions sur vos données analytiques."}]
+    def analyze_journey(self):
+        stats = self.get_journey_stats() 
+        sessions = stats['sessions']
+        scrolls = stats['scrolls']
+        form_starts = stats['form_starts']
+        conversions = stats['conversions']
 
-    # La bulle flottante (L'argument est l'icône native Streamlit)
-    with st.popover("💬", use_container_width=False):
+        insights = []
+
+        if sessions > 0:
+            if scrolls > sessions:
+                diagnosis_text = f"Engagement Fort : les utilisateurs naviguent sur plusieurs pages."
+                drop_rate_text = "✅ Gain"
+                why_text = "Les visiteurs sont captifs et naviguent sur plusieurs pages (Multi-page journey)."
+                action_text = "Insérer des liens croisés (Cross-linking) pour maintenir cette dynamique."
+            else:
+                drop_engagement = 100 - (scrolls / sessions * 100)
+                diagnosis_text = f"{int(drop_engagement)}% des visiteurs repartent sans lire."
+                drop_rate_text = f"{int(drop_engagement)}%" 
+                why_text = "Le haut de page (Titre/Image) n'accroche pas assez ou le chargement est lent."
+                action_text = "Améliorer l'accroche et le temps de chargement."
+        else:
+             diagnosis_text = "Pas de données."
+             drop_rate_text = "-"
+             why_text = ""
+             action_text = ""
+
+        insights.append({
+            "step": "1️⃣ Arrivée -> Lecture",
+            "moment": "Dans les premières secondes",
+            "diagnosis": diagnosis_text,
+            "drop_rate": drop_rate_text, 
+            "why": why_text,
+            "action": action_text
+        })
+
+        drop_interest = 100 - (form_starts / scrolls * 100) if scrolls > 0 else 0
+        insights.append({
+            "step": f"2️⃣ Lecture -> {self.interest_type}",
+            "moment": "Après consommation du contenu",
+            "diagnosis": f"{int(drop_interest)}% des lecteurs n'entament aucune démarche active.",
+            "drop_rate": f"{int(drop_interest)}%",
+            "why": "Le contenu est lu mais ne déclenche pas d'interaction.",
+            "action": "Ajouter des Call-to-Action (Boutons) plus visibles."
+        })
+
+        if form_starts > 0:
+            if conversions >= form_starts:
+                diagnosis_text = f"Performance exceptionnelle : {conversions} validations pour {form_starts} débuts."
+                drop_rate_text = "+Gain"
+                why_text = "Le formulaire est extrêmement simple, ou des utilisateurs valident sans que le début soit tracé."
+                action_text = "Capitalisez sur ce modèle de formulaire."
+            else:
+                drop_friction = 100 - (conversions / form_starts * 100)
+                diagnosis_text = f"{int(drop_friction)}% des formulaires commencés sont abandonnés."
+                drop_rate_text = f"{int(drop_friction)}%"
+                why_text = "Barrière à l'entrée (Formulaire trop long, pièce jointe manquante)."
+                action_text = "Simplifiez le formulaire et ajoutez des indications d'aide."
+        else:
+            diagnosis_text = "Aucune démarche commencée."
+            drop_rate_text = "N/A"
+            why_text = "Pas de données."
+            action_text = "Vérifier le tracking."
+
+        insights.append({
+            "step": f"3️⃣ {self.interest_type} -> {self.conversion_type}",
+            "moment": "Tentative de validation",
+            "diagnosis": diagnosis_text,
+            "drop_rate": drop_rate_text,
+            "why": why_text,
+            "action": action_text
+        })
         
-        # En-tête simple
-        st.markdown("<h4 style='margin-top: 0; color: #2c3e50;'>🤖 IA Explicatif</h4>", unsafe_allow_html=True)
-            
-        # Zone d'affichage des messages (Taille fixe)
-        messages_container = st.container(height=350)
-        with messages_container:
-            for message in st.session_state.chat_messages:
-                with st.chat_message(message["role"]):
-                    st.markdown(message["content"])
+        return insights
+
+
+# --- 4. NOUVEAU MOTEUR : CHAT AVEC LES DONNÉES ---
+class DataChatBot:
+    def __init__(self, df_ts, df_events, df_pages):
+        self.df_ts = df_ts
+        self.df_events = df_events
+        self.df_pages = df_pages
+        self.GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+
+    def get_data_context(self):
+        context = "Voici le contexte analytique actuel du site web (Google Analytics):\n\n"
+        if not self.df_ts.empty and 'Date' in self.df_ts.columns and 'Utilisateurs actifs' in self.df_ts.columns:
+            best_day = self.df_ts.loc[self.df_ts['Utilisateurs actifs'].idxmax()]
+            context += f"--- AUDIENCE GLOBALE ---\n"
+            context += f"Période analysée : du {self.df_ts['Date'].min().strftime('%Y-%m-%d')} au {self.df_ts['Date'].max().strftime('%Y-%m-%d')}\n"
+            context += f"Total des utilisateurs actifs : {self.df_ts['Utilisateurs actifs'].sum()}\n"
+            context += f"Le meilleur moment (pic) a été le {best_day['Date'].strftime('%Y-%m-%d')} avec {int(best_day['Utilisateurs actifs'])} utilisateurs actifs.\n\n"
         
-        # Formulaire d'envoi
-        with st.form("chat_form", clear_on_submit=True, border=False):
-            # Colonnes pour bien séparer le texte du bouton d'envoi
-            col1, col2 = st.columns([5, 1]) 
-            with col1:
-                prompt = st.text_input("Message", label_visibility="collapsed", placeholder="Ex: Quel est le pic de trafic ?")
-            with col2:
-                # L'icône de la fusée pour valider l'envoi
-                submitted = st.form_submit_button("🚀")
+        if not self.df_events.empty:
+            context += "--- COMPORTEMENT ET ÉVÉNEMENTS ---\n"
+            for _, row in self.df_events.iterrows():
+                context += f"- {row['Nom événement']} : {row['Total']} occurrences\n"
+            context += "\n"
             
-            if submitted and prompt:
-                st.session_state.chat_messages.append({"role": "user", "content": prompt})
-                
-                with st.spinner("Analyse..."):
-                    recent_history = [f"{m['role']}: {m['content']}" for m in st.session_state.chat_messages[-5:-1]]
-                    history_str = "\n".join(recent_history)
-                    response = chat_engine.ask_question(prompt, history_str)
-                
-                st.session_state.chat_messages.append({"role": "assistant", "content": response})
-                st.rerun()
+        if not self.df_pages.empty:
+            context += "--- DONNÉES DES PAGES ANALYSÉES ---\n"
+            # On retire le .head(15) pour envoyer toutes les pages extraites à l'IA
+            for _, row in self.df_pages.iterrows():
+                context += f"- Titre: {row['Titre']} | Vues: {row['Vues']} | Temps moyen: {int(row['Temps_Moyen'])}s | Taux de rebond: {row['Taux_Rebond']:.1f}%\n"
+        
+        return context
+
+    def ask_question(self, question, history_str=""):
+        if not GEMINI_AVAILABLE or not self.GEMINI_API_KEY:
+            return "⚠️ L'API Gemini n'est pas configurée ou la librairie `google-genai` est manquante. Veuillez vérifier votre environnement."
+        
+        data_context = self.get_data_context()
+        
+        prompt = f"""Tu es un Data Analyst expert et francophone qui aide un décideur à comprendre les performances de son site web.
+        {data_context}
+        
+        Historique de la conversation récente :
+        {history_str}
+        
+        Question du décideur : {question}
+        
+        Règles de réponse :
+        1. Réponds de manière claire, concise et professionnelle.
+        2. Base-toi EXCLUSIVEMENT sur les données fournies ci-dessus.
+        3. Si la réponse n'est pas contenue dans les données (par exemple s'il demande la météo ou une donnée de l'année dernière non présente), dis-le honnêtement sans inventer de chiffres.
+        4. N'hésite pas à donner un mini-conseil d'optimisation basé sur ton constat.
+        """
+        
+        try:
+            client = genai.Client(api_key=self.GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+            return response.text
+        except Exception as e:
+            return f"Erreur lors de la communication avec l'IA : {str(e)}"
